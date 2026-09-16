@@ -301,7 +301,7 @@ export class BookingsService {
 
     // If cancelled or rejected, release slot capacity
     if (
-      [BookingStatus.CANCELLED, BookingStatus.REJECTED].includes(targetStatus) &&
+      (targetStatus === BookingStatus.CANCELLED || targetStatus === BookingStatus.REJECTED) &&
       booking.slotId
     ) {
       await prisma.pickupSlot.update({

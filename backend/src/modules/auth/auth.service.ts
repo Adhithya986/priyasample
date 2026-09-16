@@ -23,9 +23,8 @@ export class AuthService {
     const salt = await bcrypt.genSalt(12);
     const passwordHash = await bcrypt.hash(data.password, salt);
 
-    const role = data.role && [UserRole.CUSTOMER, UserRole.SHOP_OWNER].includes(data.role)
-      ? data.role
-      : UserRole.CUSTOMER;
+    const role =
+      data.role === UserRole.SHOP_OWNER ? UserRole.SHOP_OWNER : UserRole.CUSTOMER;
 
     const user = await prisma.user.create({
       data: {
