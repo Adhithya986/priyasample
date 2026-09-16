@@ -1,0 +1,258 @@
+// Prisma Schema for Local Pickup Platform ("Book before you go. Pick up when you arrive.")
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum UserRole {
+  CUSTOMER
+  SHOP_OWNER
+  SHOP_STAFF
+  ADMIN
+}
+
+enum ShopStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  SUSPENDED
+}
+
+enum OfferingType {
+  SERVICE
+  PRODUCT
+}
+
+enum BookingStatus {
+  BOOKED
+  ACCEPTED
+  PREPARING
+  READY
+  COLLECTED
+  REJECTED
+  CANCELLED
+  EXPIRED
+}
+
+model User {
+  id           String         @id @default(uuid())
+  email        String         @unique
+  passwordHash String
+  name         String
+  phone        String?
+  role         UserRole       @default(CUSTOMER)
+  isActive     Boolean        @default(true)
+  createdAt    DateTime       @default(now())
+  updatedAt    DateTime       @updatedAt
+
+  // Relationships
+  ownedShops    Shop[]         @relation("ShopOwner")
+  staffShops    ShopStaff[]
+  bookings      Booking[]      @relation("CustomerBookings")
+  documents     PrintDocument[]
+  notifications Notification[]
+
+  @@index([email])
+  @@index([role])
+}
+
+model ShopCategory {
+  id          String   @id @default(uuid())
+  name        String   @unique
+  slug        String   @unique
+  description String?
+  icon        String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  shops       Shop[]
+}
+
+model Shop {
+  id                  String       @id @default(uuid())
+  ownerId             String
+  categoryId          String?
+  name                String
+  slug                String       @unique
+  description         String?
+  address             String
+  area                String       // For neighborhood/locality discovery
+  phone               String
+  email               String?
+  openingHours        String       // E.g. "09:00 - 20:00"
+  slotDurationMinutes Int          @default(10)
+  slotCapacity        Int          @default(5)
+  status              ShopStatus   @default(APPROVED)
+  createdAt           DateTime     @default(now())
+  updatedAt           DateTime     @updatedAt
+
+  // Relationships
+  owner               User         @relation("ShopOwner", fields: [ownerId], references: [id], onDelete: Cascade)
+  category            ShopCategory? @relation(fields: [categoryId], references: [id])
+  staff               ShopStaff[]
+  offerings           Offering[]
+  pickupSlots         PickupSlot[]
+  bookings            Booking[]
+  inventories         Inventory[]
+
+  @@index([ownerId])
+  @@index([area])
+  @@index([status])
+}
+
+model ShopStaff {
+  id        String   @id @default(uuid())
+  userId    String
+  shopId    String
+  roleTitle String?  @default("Staff")
+  createdAt DateTime @default(now())
+
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  shop      Shop     @relation(fields: [shopId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, shopId])
+}
+
+model Offering {
+  id            String        @id @default(uuid())
+  shopId        String
+  type          OfferingType  @default(SERVICE)
+  name          String
+  description   String?
+  basePrice     Float         @default(0.0)
+  // Store JSON pricing structure for flexible printing / product rates
+  // Example for printing: { paperSizes: { A4: 2.0, A3: 5.0 }, colorSurcharge: 5.0, doubleSidedSurcharge: 1.0, addons: { binding: 30, lamination: 20 } }
+  pricingConfig String?       @default("{}")
+  isActive      Boolean       @default(true)
+  createdAt     DateTime      @default(now())
+  updatedAt     DateTime      @updatedAt
+
+  shop          Shop          @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  bookingItems  BookingItem[]
+  inventory     Inventory?
+
+  @@index([shopId])
+}
+
+model PickupSlot {
+  id            String    @id @default(uuid())
+  shopId        String
+  date          DateTime  // Date of slot (truncated to day)
+  startTime     String    // HH:mm e.g. "09:00"
+  endTime       String    // HH:mm e.g. "09:10"
+  capacity      Int       @default(5)
+  reservedCount Int       @default(0)
+  isAvailable   Boolean   @default(true)
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  shop          Shop      @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  bookings      Booking[]
+
+  @@unique([shopId, date, startTime])
+  @@index([shopId, date])
+}
+
+model Booking {
+  id            String         @id @default(uuid())
+  bookingNumber String         @unique // Human readable: LP-XXXX
+  customerId    String
+  shopId        String
+  slotId        String?
+  status        BookingStatus  @default(BOOKED)
+  pickupToken   String?        @unique // Secure random token for QR pickup verification
+  subtotal      Float          @default(0.0)
+  tax           Float          @default(0.0)
+  totalPrice    Float          @default(0.0)
+  notes         String?
+  pickupTime    DateTime?      // Snapshot of actual target pickup timestamp
+  collectedAt   DateTime?      // When shop verified QR and handed over
+  createdAt     DateTime       @default(now())
+  updatedAt     DateTime       @updatedAt
+
+  customer      User           @relation("CustomerBookings", fields: [customerId], references: [id], onDelete: Cascade)
+  shop          Shop           @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  slot          PickupSlot?    @relation(fields: [slotId], references: [id])
+  items         BookingItem[]
+  documents     PrintDocument[]
+  notifications Notification[]
+
+  @@index([customerId])
+  @@index([shopId])
+  @@index([status])
+  @@index([pickupToken])
+}
+
+model BookingItem {
+  id            String   @id @default(uuid())
+  bookingId     String
+  offeringId    String?
+  quantity      Int      @default(1)
+  unitPrice     Float    @default(0.0)
+  totalPrice    Float    @default(0.0)
+  // JSON payload containing: paperSize, colorMode, sides, copies, optionalServices, pages
+  configuration String?  @default("{}")
+  createdAt     DateTime @default(now())
+
+  booking       Booking   @relation(fields: [bookingId], references: [id], onDelete: Cascade)
+  offering      Offering? @relation(fields: [offeringId], references: [id])
+
+  @@index([bookingId])
+}
+
+model PrintDocument {
+  id               String    @id @default(uuid())
+  bookingId        String?
+  customerId       String
+  originalFileName String
+  mimeType         String
+  fileSize         Int
+  storageKey       String    @unique // UUID or hashed key in private storage
+  retentionHours   Int       @default(24)
+  expiresAt        DateTime  // Timestamp after which document is purged
+  isDeleted        Boolean   @default(false)
+  createdAt        DateTime  @default(now())
+
+  booking          Booking?  @relation(fields: [bookingId], references: [id], onDelete: SetNull)
+  customer         User      @relation(fields: [customerId], references: [id], onDelete: Cascade)
+
+  @@index([bookingId])
+  @@index([customerId])
+  @@index([expiresAt, isDeleted])
+}
+
+model Inventory {
+  id         String   @id @default(uuid())
+  shopId     String
+  offeringId String   @unique
+  stock      Int      @default(0)
+  reserved   Int      @default(0)
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  shop       Shop     @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  offering   Offering @relation(fields: [offeringId], references: [id], onDelete: Cascade)
+
+  @@index([shopId])
+}
+
+model Notification {
+  id        String   @id @default(uuid())
+  userId    String
+  bookingId String?
+  title     String
+  message   String
+  type      String   @default("INFO") // INFO, SUCCESS, WARNING, ALERT
+  isRead    Boolean  @default(false)
+  createdAt DateTime @default(now())
+
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  booking   Booking? @relation(fields: [bookingId], references: [id], onDelete: SetNull)
+
+  @@index([userId, isRead])
+}
